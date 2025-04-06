@@ -1,15 +1,23 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-
-DATABASE_URL = "mysql+pymysql://ofbiz:ofbiz@localhost:3307/ofbiz_tenant23"
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from consts import DATABASES
 
 Base = declarative_base()
 
-def get_db():
+# Tạo engine và session factory cho từng database
+engines = {name: create_engine(url) for name, url in DATABASES.items()}
+SessionFactories = {
+    name: sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    for name, engine in engines.items()
+}
+
+# Hàm get_db cho phép chọn database
+def get_db(db_name: str):
+    SessionLocal = SessionFactories.get(db_name)
+    if SessionLocal is None:
+        raise ValueError(f"Database '{db_name}' is not configured.")
+    
     db = SessionLocal()
     try:
         yield db

@@ -30,6 +30,7 @@
 
 - Change database connection in database.py
 - Create table in obiz db
+
 ```sql
 CREATE TABLE `person_embedding` (
 	`PARTY_ID` VARCHAR(20) NOT NULL COLLATE 'utf8mb3_general_ci',
@@ -44,6 +45,7 @@ COLLATE='utf8mb3_general_ci'
 ENGINE=InnoDB
 ;
 ```
+
 ```sh
     # Run Redis server
     ## Windows
@@ -52,11 +54,9 @@ ENGINE=InnoDB
     ./Redis/redis-server.exe
 
     # Run server
-    ./.env/Scripts/activate     # active environment
+    ./.env/Scripts/activate
 
     python main.py
 ```
 
-
 </details>
-

@@ -1,10 +1,9 @@
-from typing import List
-from fastapi import FastAPI, File, UploadFile, Form, Request
+from fastapi import FastAPI, Request
 import uvicorn
 import redis
 import cv2
 import numpy as np
-from database import SessionLocal
+from database import get_db
 from schemas import PersonEmbeddingCreate
 from repositories.person_embedding_store import PersonEmbeddingStore
 from keras_facenet import FaceNet
@@ -12,7 +11,14 @@ import pickle
 from scipy.spatial.distance import cosine
 import asyncio
 import logging
+from consts import DATABASES
 
+class RecorgnizeFace:
+    def __init__(self, party_id: str, score: float):
+        self.party_id = party_id
+        self.score = score
+
+    
 app = FastAPI()
 
 # Kết nối Redis
@@ -20,17 +26,25 @@ redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
 embedder = FaceNet()  # Load model FaceNet
 
-# Kết nối MySQL
-db = SessionLocal()
 LOG = logging.getLogger(__name__)
 
 # Hàm tải dữ liệu nhân viên từ DB vào cache
 async def load_employee_data():
     redis_client.flushdb()  # Xóa cache cũ
-    data = PersonEmbeddingStore.get_all_person_embedding(db)
-    for item in data:
-        encoding = pickle.loads(item.embedding)
-        redis_client.set(item.party_id, pickle.dumps(encoding))
+
+    for tenant_cd, url in DATABASES.items():
+        db = next(get_db(tenant_cd))  # Lấy session cho database hiện tại
+        data = PersonEmbeddingStore.get_all_person_embedding(db)
+        for item in data:
+            encoding = pickle.loads(item.embedding)
+            redis_key = f"{tenant_cd}:{item.party_id}"
+            redis_client.set(redis_key, pickle.dumps(encoding))
+
+# Dùng asyncio để chạy song song việc so sánh
+async def compare_face_with_redis(key, face_encoding):
+    known_encoding = pickle.loads(redis_client.get(key))
+    dist = cosine(face_encoding, known_encoding)
+    return key.decode(), dist
 
 @app.get("/reload-cache")
 async def reload_cache():
@@ -42,46 +56,43 @@ async def startup_event():
     await load_employee_data()
 
 @app.post("/recognize")
-async def recognize_face(image: UploadFile = File(...)):
-    LOG.info("recognize_face")
+async def recognize_face(request: Request):
     """API nhận diện khuôn mặt"""
-    image_bytes = await image.read()
-    image = np.frombuffer(image_bytes, dtype=np.uint8)
-    image = cv2.imdecode(image, cv2.IMREAD_COLOR)
+    form = await request.form()  # Lấy toàn bộ form data
+    tenant_cd = form.get("tenant_cd")
     
-    # Chuyển ảnh sang RGB
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    # Trích xuất đặc trưng khuôn mặt
-    face_encoding = embedder.embeddings([rgb_image])[0]
-
-    # # So sánh với dữ liệu trong Redis
-    # min_dist = 1.0
-    # best_match = "Unknown"
-
-    # for key in redis_client.keys():
-    #     known_encoding = pickle.loads(redis_client.get(key))
-    #     dist = cosine(face_encoding, known_encoding)
-    #     if dist < min_dist:
-    #         min_dist = dist
-    #         best_match = key.decode()
+    if not tenant_cd:
+        return {"error": "Database name is required."}
+    
+    results = []
 
     # Lấy danh sách tất cả các key từ Redis một cách bất đồng bộ
-    redis_keys = list(redis_client.keys())
+    redis_keys = list(redis_client.keys(f"{tenant_cd}:*"))
+    for key in form.keys():
+        if key.startswith("image"):
+            image = form[key]
+            
+            image_bytes = await image.read()
+            image = np.frombuffer(image_bytes, dtype=np.uint8)
+            image = cv2.imdecode(image, cv2.IMREAD_COLOR)
+    
+            # Chuyển ảnh sang RGB
+            # rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    # Dùng asyncio để chạy song song việc so sánh
-    async def compare_face_with_redis(key):
-        known_encoding = pickle.loads(redis_client.get(key))
-        dist = cosine(face_encoding, known_encoding)
-        return key.decode(), dist
+            # Trích xuất đặc trưng khuôn mặt
+            face_encoding = embedder.embeddings([image])[0]
+    
+            # Chạy song song các tác vụ nhận diện
+            comparisons = await asyncio.gather(*[compare_face_with_redis(key, face_encoding) for key in redis_keys])
 
-    # Chạy song song các tác vụ nhận diện
-    comparisons = await asyncio.gather(*[compare_face_with_redis(key) for key in redis_keys])
-
-    # Tìm kết quả tốt nhất
-    best_match, min_dist = min(comparisons, key=lambda x: x[1])
-
-    return {"name": best_match, "score": min_dist}
+            # Tìm kết quả tốt nhất
+            best_match, min_dist = min(comparisons, key=lambda x: x[1])
+            if min_dist < 0.3:  # Ngưỡng nhận diện
+                results.append(RecorgnizeFace(best_match.replace(f"{tenant_cd}:", ""), min_dist))
+            else:
+                results.append(RecorgnizeFace("Unknown", min_dist))
+    
+    return {"results": [result.__dict__ for result in results]}
 
 @app.post("/add_employee")
 async def add_employee(request: Request):
@@ -96,6 +107,11 @@ async def add_employee(request: Request):
     """
     form = await request.form()  # Lấy toàn bộ form data
     party_id = form.get("party_id")
+    tenant_cd = form.get("tenant_cd")
+
+    if not party_id or not tenant_cd:
+        return {"error": "Some required fields are missing."}
+    
     encodings = []
 
      # Duyệt qua các key của form data
@@ -116,27 +132,32 @@ async def add_employee(request: Request):
     if not encodings:
         return {"error": "Không nhận được hình hợp lệ để trích xuất khuôn mặt."}
     
-    # Tính trung bình các encoding để có vector đại diện cho nhân viên
-    avg_encoding = np.mean(encodings, axis=0)
-    encoding_blob = pickle.dumps(avg_encoding)
-
-    
     # Lưu vào database
     try:
-        entity = PersonEmbeddingCreate(party_id=party_id, embedding=encoding_blob)
+        db = next(get_db(tenant_cd))
         exist = PersonEmbeddingStore.get_person_embedding_by_id(db, party_id)
+        
+        if exist:
+            existing_blob = pickle.loads(exist.embedding)
+            encodings.append(existing_blob)
 
+        avg_encoding = np.mean(encodings, axis=0)
+        encoding_blob = pickle.dumps(avg_encoding)
+
+        entity = PersonEmbeddingCreate(party_id=party_id, embedding=encoding_blob)
         if exist:
             PersonEmbeddingStore.update_person_embedding(db, party_id, entity)
         else:
             PersonEmbeddingStore.create_person_embedding(db, entity)
+
 
     except Exception as e:
         return {"error": f"Lỗi khi lưu vào MySQL: {e}"}
     
     # Cập nhật cache Redis ngay lập tức
     try:
-        redis_client.set(party_id, encoding_blob)
+        redis_key = f"{tenant_cd}:{party_id}"
+        redis_client.set(redis_key, encoding_blob)
     except Exception as e:
         return {"error": f"Lỗi khi cập nhật Redis: {e}"}
 

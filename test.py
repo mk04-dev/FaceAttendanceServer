@@ -1,6 +1,4 @@
 import redis
-from database import SessionLocal
-from repositories.person_embedding_store import PersonEmbeddingStore
 import pickle
 import cv2
 from keras_facenet import FaceNet
@@ -10,7 +8,7 @@ embedder = FaceNet()  # Load model FaceNet
 
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
-image = cv2.imread('test1.jpg')
+image = cv2.imread('test.jpg')
 # Chuyển ảnh sang RGB
 rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
