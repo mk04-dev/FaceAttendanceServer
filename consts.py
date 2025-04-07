@@ -14,3 +14,5 @@ DATABASES = {
     "manage": "mysql+pymysql://ofbiz:ofbiz@localhost/ofbiz_manage",
     "tenant1": "mysql+pymysql://ofbiz:ofbiz@localhost/ofbiz_tenant23",
 }
+
+IMG_SIZE = (160, 160)
