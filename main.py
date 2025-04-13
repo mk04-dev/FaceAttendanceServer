@@ -1,23 +1,25 @@
+from datetime import datetime
 from fastapi import FastAPI, Request
 import uvicorn
 import redis
 import cv2
 import numpy as np
 from database import get_db
-from schemas import PersonEmbeddingCreate
+from schemas import PersonEmbeddingCreate, DmsPartyLocationHistoryCreate
 from repositories.person_embedding_store import PersonEmbeddingStore
+from repositories.dms_party_location_history_store import DmsPartyLocationHistoryStore
 from keras_facenet import FaceNet
 import pickle
 from scipy.spatial.distance import cosine
 import asyncio
 import logging
-from consts import DATABASES
+from consts import DATABASES, GEO_POINT_ID, BRANCH_ID
 
 class RecorgnizeFace:
-    def __init__(self, party_id: str, score: float):
+    def __init__(self, party_id: str, score: float, added: str):
         self.party_id = party_id
         self.score = score
-
+        self.added = added
     
 app = FastAPI()
 
@@ -26,6 +28,7 @@ redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
 embedder = FaceNet()  # Load model FaceNet
 
+history = {}
 LOG = logging.getLogger(__name__)
 
 # Hàm tải dữ liệu nhân viên từ DB vào cache
@@ -46,6 +49,32 @@ async def compare_face_with_redis(key, face_encoding):
     dist = cosine(face_encoding, known_encoding)
     return key.decode(), dist
 
+async def add_dms_history(db, party_id):
+    current_timestamp = datetime.now()
+    entity = DmsPartyLocationHistoryCreate()
+    entity.party_id = party_id
+    entity.geo_point_id = str(GEO_POINT_ID)
+    entity.note = "Camera detection"
+    entity.source_timekeeping = "Camera detection"
+    entity.branch_id = str(BRANCH_ID)
+    entity.created_date = current_timestamp
+    entity.updated_date = current_timestamp
+    entity.created_stamp =current_timestamp
+    entity.created_tx_stamp = current_timestamp
+    entity.last_updated_stamp = current_timestamp
+    entity.last_updated_tx_stamp = current_timestamp
+    try:
+        ## Kiểm tra xem đã có lịch sử trong 10 giây qua chưa
+        if party_id in history and (current_timestamp - history[party_id]).total_seconds() < 10:
+            return "Already added"
+        DmsPartyLocationHistoryStore.create_location_history(db, entity)
+        history[party_id] = current_timestamp
+        return "Added"
+    except Exception as e:
+        print("An error occurred while adding DMS history:", e)
+        return "Error"
+
+
 @app.get("/reload-cache")
 async def reload_cache():
     await load_employee_data()
@@ -65,7 +94,7 @@ async def recognize_face(request: Request):
         return {"error": "Database name is required."}
     
     results = []
-
+    db = next(get_db(tenant_cd))
     # Lấy danh sách tất cả các key từ Redis một cách bất đồng bộ
     redis_keys = list(redis_client.keys(f"{tenant_cd}:*"))
     for key in form.keys():
@@ -88,9 +117,10 @@ async def recognize_face(request: Request):
             # Tìm kết quả tốt nhất
             best_match, min_dist = min(comparisons, key=lambda x: x[1])
             if min_dist < 0.3:  # Ngưỡng nhận diện
-                results.append(RecorgnizeFace(best_match.replace(f"{tenant_cd}:", ""), min_dist))
+                added = await add_dms_history(db, best_match.replace(f"{tenant_cd}:", ""))  # Thêm lịch sử vào DB
+                results.append(RecorgnizeFace(best_match.replace(f"{tenant_cd}:", ""), min_dist, added))
             else:
-                results.append(RecorgnizeFace("Unknown", min_dist))
+                results.append(RecorgnizeFace("Unknown", min_dist, "Not added"))
     
     return {"results": [result.__dict__ for result in results]}
 

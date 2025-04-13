@@ -25,15 +25,21 @@ class DmsPartyLocationHistoryBase(BaseModel):
     party_id: Optional[str] = None
     geo_point_id: Optional[str] = None
     content_id: Optional[str] = None
-    product_store_id: Optional[str] = None
-    app_installation_id: Optional[int] = None
-    created_by: Optional[str] = None
-    updated_by: Optional[str] = None
-    recorded_by_party_id: Optional[str] = None
+    # product_store_id: Optional[str] = None
+    # app_installation_id: Optional[int] = None
+    # created_by: Optional[str] = None
+    # updated_by: Optional[str] = None
+    # recorded_by_party_id: Optional[str] = None
     note: Optional[str] = None
     source_timekeeping: Optional[str] = None
-    register_business_trip_id: Optional[int] = None
+    # register_business_trip_id: Optional[int] = None
     branch_id: Optional[str] = None
+    created_date: Optional[datetime] = None
+    updated_date: Optional[datetime] = None
+    last_updated_stamp: Optional[datetime] = None
+    last_updated_tx_stamp: Optional[datetime] = None
+    created_stamp: Optional[datetime] = None
+    created_tx_stamp: Optional[datetime] = None
 
 class DmsPartyLocationHistoryCreate(DmsPartyLocationHistoryBase):
     pass

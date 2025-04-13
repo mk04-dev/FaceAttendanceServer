@@ -8,7 +8,9 @@ Press 'q' to quit the program.
 import cv2
 import mediapipe as mp
 import os
-from consts import IMG_SIZE
+
+IMG_SIZE = (160, 160)  # Size to which the images will be resized
+
 # Initialize Mediapipe Face Detection
 mp_face_detection = mp.solutions.face_detection
 mp_drawing = mp.solutions.drawing_utils

@@ -1,31 +1,34 @@
-import redis
-import pickle
-import cv2
-from keras_facenet import FaceNet
-from scipy.spatial.distance import cosine
+from datetime import datetime
+from repositories.dms_party_location_history_store import DmsPartyLocationHistoryStore
+from database import get_db
+from consts import DATABASES, GEO_POINT_ID, BRANCH_ID
+from schemas import PersonEmbeddingCreate, DmsPartyLocationHistoryCreate
 
-embedder = FaceNet()  # Load model FaceNet
+def add_dms_history(db, party_id) -> bool:
+    current_timestamp = datetime.now()
+    entity = DmsPartyLocationHistoryCreate()
+    entity.party_id = party_id
+    entity.geo_point_id = str(GEO_POINT_ID)
+    entity.note = "Camera detection"
+    entity.source_timekeeping = "Camera detection"
+    entity.branch_id = str(BRANCH_ID)
+    entity.created_date = current_timestamp
+    entity.updated_date = current_timestamp
+    entity.created_stamp =current_timestamp
+    entity.created_tx_stamp = current_timestamp
+    entity.last_updated_stamp = current_timestamp
+    entity.last_updated_tx_stamp = current_timestamp
+    try:
+        DmsPartyLocationHistoryStore.create_location_history(db, entity)
+        return True
+    except Exception as e:
+        print("An error occurred while adding DMS history:", e)
+        return False
 
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
-image = cv2.imread('test.jpg')
-# Chuyển ảnh sang RGB
-rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-# Trích xuất đặc trưng khuôn mặt
-face_encoding = embedder.embeddings([rgb_image])[0]
-
-# So sánh với dữ liệu trong Redis
-min_dist = 1.0
-best_match = "Unknown"
-print(redis_client.keys())
-for key in redis_client.keys():
-    print(key)
-    known_encoding = pickle.loads(redis_client.get(key))
-    dist = cosine(face_encoding, known_encoding)
-    print(dist)
-    if dist < min_dist:
-        min_dist = dist
-        best_match = key.decode()
-
-print(best_match)
+if __name__ == "__main__":
+    # Example usage
+    db = next(get_db("tenant1"))  # Replace with your actual database session retrieval
+    party_id = "171"  # Replace with the actual party ID you want to use
+    result = add_dms_history(db, party_id)
+    print(f"DMS history added: {result}")
