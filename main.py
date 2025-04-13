@@ -13,7 +13,7 @@ import pickle
 from scipy.spatial.distance import cosine
 import asyncio
 import logging
-from consts import DATABASES, GEO_POINT_ID, BRANCH_ID
+from consts import DATABASES
 
 class RecorgnizeFace:
     def __init__(self, party_id: str, score: float, added: str):
@@ -49,14 +49,18 @@ async def compare_face_with_redis(key, face_encoding):
     dist = cosine(face_encoding, known_encoding)
     return key.decode(), dist
 
-async def add_dms_history(db, party_id):
+async def add_dms_history(db, party_id, geo_point_id, branch_id):
     current_timestamp = datetime.now()
+    ## Kiểm tra xem đã có lịch sử trong 10 giây qua chưa
+    if party_id in history and (current_timestamp - history[party_id]).total_seconds() < 10:
+        return "Already added"
+    
     entity = DmsPartyLocationHistoryCreate()
     entity.party_id = party_id
-    entity.geo_point_id = str(GEO_POINT_ID)
+    entity.geo_point_id = str(geo_point_id)
     entity.note = "Camera detection"
     entity.source_timekeeping = "Camera detection"
-    entity.branch_id = str(BRANCH_ID)
+    entity.branch_id = str(branch_id)
     entity.created_date = current_timestamp
     entity.updated_date = current_timestamp
     entity.created_stamp =current_timestamp
@@ -64,9 +68,6 @@ async def add_dms_history(db, party_id):
     entity.last_updated_stamp = current_timestamp
     entity.last_updated_tx_stamp = current_timestamp
     try:
-        ## Kiểm tra xem đã có lịch sử trong 10 giây qua chưa
-        if party_id in history and (current_timestamp - history[party_id]).total_seconds() < 10:
-            return "Already added"
         DmsPartyLocationHistoryStore.create_location_history(db, entity)
         history[party_id] = current_timestamp
         return "Added"
@@ -89,6 +90,8 @@ async def recognize_face(request: Request):
     """API nhận diện khuôn mặt"""
     form = await request.form()  # Lấy toàn bộ form data
     tenant_cd = form.get("tenant_cd")
+    geo_point_id = form.get("geo_point_id")
+    branch_id = form.get("branch_id")
     
     if not tenant_cd:
         return {"error": "Database name is required."}
@@ -117,8 +120,9 @@ async def recognize_face(request: Request):
             # Tìm kết quả tốt nhất
             best_match, min_dist = min(comparisons, key=lambda x: x[1])
             if min_dist < 0.3:  # Ngưỡng nhận diện
-                added = await add_dms_history(db, best_match.replace(f"{tenant_cd}:", ""))  # Thêm lịch sử vào DB
-                results.append(RecorgnizeFace(best_match.replace(f"{tenant_cd}:", ""), min_dist, added))
+                party_id = best_match.replace(f"{tenant_cd}:", "")
+                added = await add_dms_history(db, party_id, geo_point_id, branch_id)  # Thêm lịch sử vào DB
+                results.append(RecorgnizeFace(party_id, min_dist, added))
             else:
                 results.append(RecorgnizeFace("Unknown", min_dist, "Not added"))
     
