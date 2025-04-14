@@ -40,8 +40,12 @@ async def load_employee_data():
         data = PersonEmbeddingStore.get_all_person_embedding(db)
         for item in data:
             encoding = pickle.loads(item.embedding)
-            redis_key = f"{tenant_cd}:{item.party_id}"
+            redis_key = f"{tenant_cd}_{item.idx}:{item.party_id}"
             redis_client.set(redis_key, pickle.dumps(encoding))
+
+def get_party_id_from_key(key):
+    """Lấy party_id từ key Redis"""
+    return key.split(":")[-1]
 
 # Dùng asyncio để chạy song song việc so sánh
 async def compare_face_with_redis(key, face_encoding):
@@ -99,7 +103,7 @@ async def recognize_face(request: Request):
     results = []
     db = next(get_db(tenant_cd))
     # Lấy danh sách tất cả các key từ Redis một cách bất đồng bộ
-    redis_keys = list(redis_client.keys(f"{tenant_cd}:*"))
+    redis_keys = list(redis_client.keys(f"{tenant_cd}_*"))
     for key in form.keys():
         if key.startswith("image"):
             image = form[key]
@@ -120,7 +124,7 @@ async def recognize_face(request: Request):
             # Tìm kết quả tốt nhất
             best_match, min_dist = min(comparisons, key=lambda x: x[1])
             if min_dist < 0.3:  # Ngưỡng nhận diện
-                party_id = best_match.replace(f"{tenant_cd}:", "")
+                party_id = get_party_id_from_key(best_match)
                 added = await add_dms_history(db, party_id, geo_point_id, branch_id)  # Thêm lịch sử vào DB
                 results.append(RecorgnizeFace(party_id, min_dist, added))
             else:
@@ -137,7 +141,7 @@ async def add_employee(request: Request):
       1. Lấy tên nhân viên từ form.
       2. Duyệt qua các key bắt đầu bằng "image" để đọc nội dung file.
       3. Decode ảnh, chuyển sang RGB và trích xuất encoding từ FaceNet.
-      4. Tính trung bình encoding từ các ảnh và lưu vào MySQL cũng như cập nhật cache Redis.
+      4. Lưu encodings và lưu vào MySQL cũng như cập nhật cache Redis.
     """
     form = await request.form()  # Lấy toàn bộ form data
     party_id = form.get("party_id")
@@ -145,57 +149,125 @@ async def add_employee(request: Request):
 
     if not party_id or not tenant_cd:
         return {"error": "Some required fields are missing."}
-    
-    encodings = []
 
-     # Duyệt qua các key của form data
-    for key in form.keys():
-        if key.startswith("image"):
-            file = form[key]  # file là UploadFile
-            image_bytes = await file.read()
-            image_np = np.frombuffer(image_bytes, dtype=np.uint8)
-            img = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
-            if img is None:
-                continue
-            # Chuyển ảnh sang RGB (FaceNet thường yêu cầu ảnh RGB)
-            rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            # Trích xuất encoding, giả sử mỗi ảnh có đúng 1 khuôn mặt
-            encoding = embedder.embeddings([rgb_image])[0]
-            encodings.append(encoding)
-    
-    if not encodings:
-        return {"error": "Không nhận được hình hợp lệ để trích xuất khuôn mặt."}
-    
-    # Lưu vào database
     try:
         db = next(get_db(tenant_cd))
-        exist = PersonEmbeddingStore.get_person_embedding_by_id(db, party_id)
+
+        # Duyệt qua các key của form data
+        for key in form.keys():
+            if key.startswith("image"):
+                file = form[key]  # file là UploadFile
+                image_bytes = await file.read()
+                image_np = np.frombuffer(image_bytes, dtype=np.uint8)
+                img = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+                # Chuyển ảnh sang RGB (FaceNet thường yêu cầu ảnh RGB)
+                rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                # Trích xuất encoding, giả sử mỗi ảnh có đúng 1 khuôn mặt
+                encoding = embedder.embeddings([rgb_image])[0]
+                encoding_blob = pickle.dumps(encoding)
+                entity = PersonEmbeddingCreate(party_id=party_id, embedding=encoding_blob)
+                new_embedding = PersonEmbeddingStore.create_person_embedding(db, entity)
+                redis_key = f"{tenant_cd}_{new_embedding.idx}:{party_id}"
+                redis_client.set(redis_key, encoding_blob)
         
-        if exist:
-            existing_blob = pickle.loads(exist.embedding)
-            encodings.append(existing_blob)
-
-        avg_encoding = np.mean(encodings, axis=0)
-        encoding_blob = pickle.dumps(avg_encoding)
-
-        entity = PersonEmbeddingCreate(party_id=party_id, embedding=encoding_blob)
-        if exist:
-            PersonEmbeddingStore.update_person_embedding(db, party_id, entity)
-        else:
-            PersonEmbeddingStore.create_person_embedding(db, entity)
-
-
+        return {"message": f"Added employee {party_id}"}
     except Exception as e:
-        return {"error": f"Lỗi khi lưu vào MySQL: {e}"}
+        return {"error": e}
     
-    # Cập nhật cache Redis ngay lập tức
-    try:
-        redis_key = f"{tenant_cd}:{party_id}"
-        redis_client.set(redis_key, encoding_blob)
-    except Exception as e:
-        return {"error": f"Lỗi khi cập nhật Redis: {e}"}
+# @app.post("/add_employee")
+# async def add_employee(request: Request):
+#     """
+#     Endpoint để thêm nhân viên mới.
+#     Client gửi các file hình với các key "image0", "image1", ... và dữ liệu form "name".
+#     Server sẽ:
+#       1. Lấy tên nhân viên từ form.
+#       2. Duyệt qua các key bắt đầu bằng "image" để đọc nội dung file.
+#       3. Decode ảnh, chuyển sang RGB và trích xuất encoding từ FaceNet.
+#       4. Tính trung bình encoding từ các ảnh và lưu vào MySQL cũng như cập nhật cache Redis.
+#     """
+#     form = await request.form()  # Lấy toàn bộ form data
+#     party_id = form.get("party_id")
+#     tenant_cd = form.get("tenant_cd")
 
-    return {"message": f"Added employee {party_id}"}
+#     if not party_id or not tenant_cd:
+#         return {"error": "Some required fields are missing."}
+    
+#     encodings = []
+
+#     # Duyệt qua các key của form data
+#     for key in form.keys():
+#         if key.startswith("image"):
+#             file = form[key]  # file là UploadFile
+#             image_bytes = await file.read()
+#             image_np = np.frombuffer(image_bytes, dtype=np.uint8)
+#             img = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+#             if img is None:
+#                 continue
+#             # Chuyển ảnh sang RGB (FaceNet thường yêu cầu ảnh RGB)
+#             rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+#             # Trích xuất encoding, giả sử mỗi ảnh có đúng 1 khuôn mặt
+#             encoding = embedder.embeddings([rgb_image])[0]
+#             encodings.append(encoding)
+    
+#     if not encodings:
+#         return {"error": "Không nhận được hình hợp lệ để trích xuất khuôn mặt."}
+    
+#     # Lưu vào database
+#     try:
+#         db = next(get_db(tenant_cd))
+#         exist = PersonEmbeddingStore.get_person_embedding_by_id(db, party_id)
+        
+#         if exist:
+#             existing_blob = pickle.loads(exist.embedding)
+#             encodings.append(existing_blob)
+
+#         avg_encoding = np.mean(encodings, axis=0)
+#         encoding_blob = pickle.dumps(avg_encoding)
+
+#         entity = PersonEmbeddingCreate(party_id=party_id, embedding=encoding_blob)
+#         if exist:
+#             PersonEmbeddingStore.update_person_embedding(db, party_id, entity)
+#         else:
+#             PersonEmbeddingStore.create_person_embedding(db, entity)
+
+
+#     except Exception as e:
+#         return {"error": f"Lỗi khi lưu vào MySQL: {e}"}
+    
+#     # Cập nhật cache Redis ngay lập tức
+#     try:
+#         redis_key = f"{tenant_cd}:{party_id}"
+#         redis_client.set(redis_key, encoding_blob)
+#     except Exception as e:
+#         return {"error": f"Lỗi khi cập nhật Redis: {e}"}
+
+#     return {"message": f"Added employee {party_id}"}
+
+@app.delete("/delete_employee")
+async def delete_employee(request: Request):
+    """
+    Endpoint để xóa nhân viên.
+    Client gửi dữ liệu form với các trường "party_id" và "tenant_cd".
+    Server sẽ xóa nhân viên khỏi MySQL và Redis.
+    """
+    form = await request.form()
+    party_id = form.get("party_id")
+    tenant_cd = form.get("tenant_cd")
+    if not party_id or not tenant_cd:
+        return {"error": "Some required fields are missing."}
+    
+    try:
+        db = next(get_db(tenant_cd))
+        PersonEmbeddingStore.delete_person_embedding(db, party_id)
+        redis_keys = redis_client.keys(f"{tenant_cd}_*")
+        for key in redis_keys:
+            if party_id == get_party_id_from_key(key.decode()):
+                redis_client.delete(key)
+        return {"message": f"Deleted employee {party_id}"}
+    except Exception as e:
+        return {"error": f"Error deleting employee: {e}"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000, log_level="trace")

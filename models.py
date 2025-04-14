@@ -7,15 +7,17 @@ from datetime import datetime
 
 class PersonEmbedding(Base):
     __tablename__ = "person_embedding"
-    party_id = Column(String(20), primary_key=True, index=True)
+    idx = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    party_id = Column(String(20), ForeignKey("party.party_id"), index=True)
     embedding = Column(BLOB, nullable=True)
     created_date = Column(DateTime, default=datetime.utcnow)
     updated_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    party = relationship("Party", foreign_keys=[party_id])
     
 class Person(Base):
     __tablename__ = "person"
 
-    party_id = Column(String(20), primary_key=True, index=True)
+    party_id = Column(String(20), ForeignKey("party.party_id"), primary_key=True, index=True)
     salutation = Column(String(100), nullable=True)
     first_name = Column(String(100), nullable=True, index=True)
     middle_name = Column(String(100), nullable=True)
@@ -84,6 +86,7 @@ class Person(Base):
     # degree = Column(String(100), nullable=True)
 
     # # Quan hệ với các bảng khác
+    party = relationship("Party", foreign_keys=[party_id])
     # created_by_user = relationship("Party", foreign_keys=[created_by])
     # updated_by_user = relationship("Party", foreign_keys=[updated_by])
     # employment_status = relationship("Enumeration", foreign_keys=[employment_status_enum_id])

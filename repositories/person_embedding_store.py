@@ -24,3 +24,8 @@ class PersonEmbeddingStore:
     @staticmethod
     def get_all_person_embedding(db: Session):
         return db.query(PersonEmbedding).all()
+    
+    @staticmethod
+    def delete_person_embedding(db: Session, party_id: str):
+        db.query(PersonEmbedding).filter(PersonEmbedding.party_id == party_id).delete()
+        db.commit()
