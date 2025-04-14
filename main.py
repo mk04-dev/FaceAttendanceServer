@@ -1,5 +1,6 @@
 from datetime import datetime
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
 import uvicorn
 import redis
 import cv2
@@ -91,46 +92,48 @@ async def startup_event():
 
 @app.post("/recognize")
 async def recognize_face(request: Request):
-    """API nhận diện khuôn mặt"""
-    form = await request.form()  # Lấy toàn bộ form data
-    tenant_cd = form.get("tenant_cd")
-    geo_point_id = form.get("geo_point_id")
-    branch_id = form.get("branch_id")
-    
-    if not tenant_cd:
-        return {"error": "Database name is required."}
-    
-    results = []
-    db = next(get_db(tenant_cd))
-    # Lấy danh sách tất cả các key từ Redis một cách bất đồng bộ
-    redis_keys = list(redis_client.keys(f"{tenant_cd}_*"))
-    for key in form.keys():
-        if key.startswith("image"):
-            image = form[key]
-            
-            image_bytes = await image.read()
-            image = np.frombuffer(image_bytes, dtype=np.uint8)
-            image = cv2.imdecode(image, cv2.IMREAD_COLOR)
-    
-            # Chuyển ảnh sang RGB
-            # rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    try:
+        """API nhận diện khuôn mặt"""
+        form = await request.form()  # Lấy toàn bộ form data
+        tenant_cd = form.get("tenant_cd")
+        geo_point_id = form.get("geo_point_id")
+        branch_id = form.get("branch_id")
+        
+        if not tenant_cd:
+            return {"error": "Database name is required."}
+        
+        results = []
+        db = next(get_db(tenant_cd))
+        # Lấy danh sách tất cả các key từ Redis một cách bất đồng bộ
+        redis_keys = list(redis_client.keys(f"{tenant_cd}_*"))
+        for key in form.keys():
+            if key.startswith("image"):
+                image = form[key]
+                
+                image_bytes = await image.read()
+                image = np.frombuffer(image_bytes, dtype=np.uint8)
+                image = cv2.imdecode(image, cv2.IMREAD_COLOR)
+        
+                # Chuyển ảnh sang RGB
+                # rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-            # Trích xuất đặc trưng khuôn mặt
-            face_encoding = embedder.embeddings([image])[0]
-    
-            # Chạy song song các tác vụ nhận diện
-            comparisons = await asyncio.gather(*[compare_face_with_redis(key, face_encoding) for key in redis_keys])
+                # Trích xuất đặc trưng khuôn mặt
+                face_encoding = embedder.embeddings([image])[0]
+        
+                # Chạy song song các tác vụ nhận diện
+                comparisons = await asyncio.gather(*[compare_face_with_redis(key, face_encoding) for key in redis_keys])
 
-            # Tìm kết quả tốt nhất
-            best_match, min_dist = min(comparisons, key=lambda x: x[1])
-            if min_dist < 0.3:  # Ngưỡng nhận diện
-                party_id = get_party_id_from_key(best_match)
-                added = await add_dms_history(db, party_id, geo_point_id, branch_id)  # Thêm lịch sử vào DB
-                results.append(RecorgnizeFace(party_id, min_dist, added))
-            else:
-                results.append(RecorgnizeFace("Unknown", min_dist, "Not added"))
-    
-    return {"results": [result.__dict__ for result in results]}
+                # Tìm kết quả tốt nhất
+                best_match, min_dist = min(comparisons, key=lambda x: x[1])
+                if min_dist < 0.3:  # Ngưỡng nhận diện
+                    party_id = get_party_id_from_key(best_match)
+                    added = await add_dms_history(db, party_id, geo_point_id, branch_id)  # Thêm lịch sử vào DB
+                    results.append(RecorgnizeFace(party_id, min_dist, added))
+                else:
+                    results.append(RecorgnizeFace("Unknown", min_dist, "Not added"))
+        return JSONResponse(status_code=status.HTTP_200_OK, content=[{"party_id": result.party_id, "score": result.score, "added": result.added} for result in results])
+    except Exception as e:
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error recognizing face: {e}"})
 
 @app.post("/add_employee")
 async def add_employee(request: Request):
@@ -148,7 +151,7 @@ async def add_employee(request: Request):
     tenant_cd = form.get("tenant_cd")
 
     if not party_id or not tenant_cd:
-        return {"error": "Some required fields are missing."}
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Some required fields are missing."})
 
     try:
         db = next(get_db(tenant_cd))
@@ -172,9 +175,9 @@ async def add_employee(request: Request):
                 redis_key = f"{tenant_cd}_{new_embedding.idx}:{party_id}"
                 redis_client.set(redis_key, encoding_blob)
         
-        return {"message": f"Added employee {party_id}"}
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"Added employee {party_id}"})
     except Exception as e:
-        return {"error": e}
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error adding employee: {e}"})
     
 # @app.post("/add_employee")
 # async def add_employee(request: Request):
@@ -245,18 +248,15 @@ async def add_employee(request: Request):
 
 #     return {"message": f"Added employee {party_id}"}
 
-@app.delete("/delete_employee")
-async def delete_employee(request: Request):
+@app.delete("/delete_employee/{tenant_cd}/{party_id}")
+async def delete_employee(tenant_cd:str, party_id: str):
     """
     Endpoint để xóa nhân viên.
     Client gửi dữ liệu form với các trường "party_id" và "tenant_cd".
     Server sẽ xóa nhân viên khỏi MySQL và Redis.
     """
-    form = await request.form()
-    party_id = form.get("party_id")
-    tenant_cd = form.get("tenant_cd")
     if not party_id or not tenant_cd:
-        return {"error": "Some required fields are missing."}
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": "Some required fields are missing."})
     
     try:
         db = next(get_db(tenant_cd))
@@ -265,9 +265,9 @@ async def delete_employee(request: Request):
         for key in redis_keys:
             if party_id == get_party_id_from_key(key.decode()):
                 redis_client.delete(key)
-        return {"message": f"Deleted employee {party_id}"}
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"Deleted employee {party_id}"})
     except Exception as e:
-        return {"error": f"Error deleting employee: {e}"}
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error deleting employee: {e}"})
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000, log_level="trace")
