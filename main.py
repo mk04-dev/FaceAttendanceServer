@@ -98,14 +98,15 @@ async def recognize_face(request: Request):
         tenant_cd = form.get("tenant_cd")
         geo_point_id = form.get("geo_point_id")
         branch_id = form.get("branch_id")
-        
+        redis_keys = list(redis_client.keys(f"{tenant_cd}_*"))
+        if not redis_keys or len(redis_keys) == 0:
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "No employee data found in Redis."})
         if not tenant_cd:
-            return {"error": "Database name is required."}
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Some required fields are missing."})
         
         results = []
         db = next(get_db(tenant_cd))
         # Lấy danh sách tất cả các key từ Redis một cách bất đồng bộ
-        redis_keys = list(redis_client.keys(f"{tenant_cd}_*"))
         for key in form.keys():
             if key.startswith("image"):
                 image = form[key]
@@ -130,8 +131,11 @@ async def recognize_face(request: Request):
                     added = await add_dms_history(db, party_id, geo_point_id, branch_id)  # Thêm lịch sử vào DB
                     results.append(RecorgnizeFace(party_id, min_dist, added))
                 else:
-                    results.append(RecorgnizeFace("Unknown", min_dist, "Not added"))
-        return JSONResponse(status_code=status.HTTP_200_OK, content=[{"party_id": result.party_id, "score": result.score, "added": result.added} for result in results])
+                    results.append(RecorgnizeFace("Unknown", min_dist, 'Not added'))
+                    # Tìm kết quả tốt nhất
+        # return {"results": [result.__dict__ for result in results]}
+
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"results": [result.__dict__ for result in results]})
     except Exception as e:
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error recognizing face: {e}"})
 
@@ -166,9 +170,9 @@ async def add_employee(request: Request):
                 if img is None:
                     continue
                 # Chuyển ảnh sang RGB (FaceNet thường yêu cầu ảnh RGB)
-                rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                # rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 # Trích xuất encoding, giả sử mỗi ảnh có đúng 1 khuôn mặt
-                encoding = embedder.embeddings([rgb_image])[0]
+                encoding = embedder.embeddings([img])[0]
                 encoding_blob = pickle.dumps(encoding)
                 entity = PersonEmbeddingCreate(party_id=party_id, embedding=encoding_blob)
                 new_embedding = PersonEmbeddingStore.create_person_embedding(db, entity)
