@@ -4,7 +4,7 @@ import numpy as np
 import consts
 from deepface import DeepFace
 from mtcnn import MTCNN
-
+from consts import TENANT_DICT
 detector = MTCNN()  # Bộ phát hiện khuôn mặt
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")  # Bộ phát hiện khuôn mặt
@@ -40,3 +40,9 @@ def cosine_similarity(vec1, vec2):
 def get_embedding(img):
     """Lấy embedding của khuôn mặt"""
     return DeepFace.represent(img, model_name="Facenet", enforce_detection=False)[0]['embedding']
+
+def get_tenant_info(tenant_id):
+    """Lấy thông tin tenant từ TENANT_DICT"""
+    if tenant_id not in TENANT_DICT:
+        raise ValueError(f"Tenant ID [{tenant_id}] not found")
+    return TENANT_DICT[tenant_id]

@@ -5,14 +5,16 @@ import uvicorn
 import redis
 import cv2
 import numpy as np
+from database import get_db
+from schemas import PersonEmbeddingCreate, DmsPartyLocationHistoryCreate
+from repositories.person_embedding_store import PersonEmbeddingStore
+from repositories.dms_party_location_history_store import DmsPartyLocationHistoryStore
 from keras_facenet import FaceNet
 import pickle
 from scipy.spatial.distance import cosine
 import asyncio
-import json
-from consts import TENANT_DICT
-from api import load_all_embeddings, create_timekeeping, create_person_embedding, delete_person_embedding
-from logger_service import LoggerService
+import logging
+from consts import DATABASES
 
 class RecorgnizeFace:
     def __init__(self, party_id: str, score: float, added: str):
@@ -28,21 +30,19 @@ redis_client = redis.Redis(host='localhost', port=6379, db=0)
 embedder = FaceNet()  # Load model FaceNet
 
 history = {}
-LOGGER = LoggerService().get_logger()
+LOG = logging.getLogger(__name__)
 
 # Hàm tải dữ liệu nhân viên từ DB vào cache
 async def load_employee_data():
     redis_client.flushdb()  # Xóa cache cũ
 
-    for tenant_cd in TENANT_DICT.keys():
-        try:
-            data = await load_all_embeddings(tenant_cd)  # Tải dữ liệu từ DB vào cache
-            for item in data:
-                encoding = pickle.loads(item.embedding)
-                redis_key = f"{tenant_cd}_{item.idx}:{item.party_id}"
-                redis_client.set(redis_key, pickle.dumps(encoding))
-        except Exception as e:
-            LOGGER.error(f"Loading data for [{tenant_cd}]: {e}")
+    for tenant_cd, url in DATABASES.items():
+        db = next(get_db(tenant_cd))  # Lấy session cho database hiện tại
+        data = PersonEmbeddingStore.get_all_person_embedding(db)
+        for item in data:
+            encoding = pickle.loads(item.embedding)
+            redis_key = f"{tenant_cd}_{item.idx}:{item.party_id}"
+            redis_client.set(redis_key, pickle.dumps(encoding))
 
 def get_party_id_from_key(key):
     """Lấy party_id từ key Redis"""
@@ -54,18 +54,30 @@ async def compare_face_with_redis(key, face_encoding):
     dist = cosine(face_encoding, known_encoding)
     return key.decode(), dist
 
-async def add_dms_history(tenant_cd, party_id, address, branch_id, image_bytes):
+async def add_dms_history(db, party_id, geo_point_id, branch_id):
     current_timestamp = datetime.now()
     ## Kiểm tra xem đã có lịch sử trong 10 giây qua chưa
     if party_id in history and (current_timestamp - history[party_id]).total_seconds() < 10:
         return "Already added"
+    
+    entity = DmsPartyLocationHistoryCreate()
+    entity.party_id = party_id
+    entity.geo_point_id = str(geo_point_id)
+    entity.note = "Camera detection"
+    entity.source_timekeeping = "Camera detection"
+    entity.branch_id = str(branch_id)
+    entity.created_date = current_timestamp
+    entity.updated_date = current_timestamp
+    entity.created_stamp =current_timestamp
+    entity.created_tx_stamp = current_timestamp
+    entity.last_updated_stamp = current_timestamp
+    entity.last_updated_tx_stamp = current_timestamp
     try:
-        await create_timekeeping(tenant_cd, party_id, address, branch_id, image_bytes)
+        DmsPartyLocationHistoryStore.create_location_history(db, entity)
         history[party_id] = current_timestamp
-        LOGGER.info(f"Added timekeeping for [{party_id}]")
         return "Added"
     except Exception as e:
-        LOGGER.error(f"Adding timekeeping for [{party_id}]: {e}")
+        print("An error occurred while adding DMS history:", e)
         return "Error"
 
 
@@ -84,19 +96,16 @@ async def recognize_face(request: Request):
         """API nhận diện khuôn mặt"""
         form = await request.form()  # Lấy toàn bộ form data
         tenant_cd = form.get("tenant_cd")
-        address_str = form.get("address")
-        address = json.loads(address_str) if address_str else {}
-        
+        geo_point_id = form.get("geo_point_id")
         branch_id = form.get("branch_id")
         redis_keys = list(redis_client.keys(f"{tenant_cd}_*"))
         if not redis_keys or len(redis_keys) == 0:
-            LOGGER.warning("No employee data found in Redis.")
             return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "No employee data found in Redis."})
         if not tenant_cd:
-            LOGGER.warning("Tenant code is missing.")
-            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Tenant code is missing."})
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Some required fields are missing."})
         
         results = []
+        db = next(get_db(tenant_cd))
         # Lấy danh sách tất cả các key từ Redis một cách bất đồng bộ
         for key in form.keys():
             if key.startswith("image"):
@@ -119,15 +128,15 @@ async def recognize_face(request: Request):
                 best_match, min_dist = min(comparisons, key=lambda x: x[1])
                 if min_dist < 0.3:  # Ngưỡng nhận diện
                     party_id = get_party_id_from_key(best_match)
-                    added = await add_dms_history(tenant_cd, party_id, address, branch_id, image_bytes)  # Thêm lịch sử vào DB
+                    added = await add_dms_history(db, party_id, geo_point_id, branch_id)  # Thêm lịch sử vào DB
                     results.append(RecorgnizeFace(party_id, min_dist, added))
                 else:
                     results.append(RecorgnizeFace("Unknown", min_dist, 'Not added'))
                     # Tìm kết quả tốt nhất
+        # return {"results": [result.__dict__ for result in results]}
 
         return JSONResponse(status_code=status.HTTP_200_OK, content={"results": [result.__dict__ for result in results]})
     except Exception as e:
-        LOGGER.error(f"Recognizing face: {e}")
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error recognizing face: {e}"})
 
 @app.post("/add_employee")
@@ -146,12 +155,12 @@ async def add_employee(request: Request):
     tenant_cd = form.get("tenant_cd")
 
     if not party_id or not tenant_cd:
-        LOGGER.warning("Party ID or tenant code is missing.")
-        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Party ID or tenant code is missing."})
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Some required fields are missing."})
 
     try:
+        db = next(get_db(tenant_cd))
+
         # Duyệt qua các key của form data
-        data = []
         for key in form.keys():
             if key.startswith("image"):
                 file = form[key]  # file là UploadFile
@@ -165,25 +174,83 @@ async def add_employee(request: Request):
                 # Trích xuất encoding, giả sử mỗi ảnh có đúng 1 khuôn mặt
                 encoding = embedder.embeddings([img])[0]
                 encoding_blob = pickle.dumps(encoding)
-                data.append({
-                    "party_id": party_id,
-                    "embedding": encoding_blob,
-                })
-        if not data:
-            LOGGER.warning("There is no valid image to extract face.")
-            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "There is no valid image to extract face."})
+                entity = PersonEmbeddingCreate(party_id=party_id, embedding=encoding_blob)
+                new_embedding = PersonEmbeddingStore.create_person_embedding(db, entity)
+                redis_key = f"{tenant_cd}_{new_embedding.idx}:{party_id}"
+                redis_client.set(redis_key, encoding_blob)
         
-        # Lưu vào database
-        results =  await create_person_embedding(tenant_cd, data)
-        for result in results:
-            redis_key = f"{tenant_cd}_{result.id}:{result.party_id}"
-            redis_client.set(redis_key, result.embedding)
-        
-        LOGGER.info(f"Added employee {party_id} with {len(data)} images.")
         return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"Added employee {party_id}"})
     except Exception as e:
-        LOGGER.error(f"Adding employee: {e}")
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error adding employee: {e}"})
+    
+# @app.post("/add_employee")
+# async def add_employee(request: Request):
+#     """
+#     Endpoint để thêm nhân viên mới.
+#     Client gửi các file hình với các key "image0", "image1", ... và dữ liệu form "name".
+#     Server sẽ:
+#       1. Lấy tên nhân viên từ form.
+#       2. Duyệt qua các key bắt đầu bằng "image" để đọc nội dung file.
+#       3. Decode ảnh, chuyển sang RGB và trích xuất encoding từ FaceNet.
+#       4. Tính trung bình encoding từ các ảnh và lưu vào MySQL cũng như cập nhật cache Redis.
+#     """
+#     form = await request.form()  # Lấy toàn bộ form data
+#     party_id = form.get("party_id")
+#     tenant_cd = form.get("tenant_cd")
+
+#     if not party_id or not tenant_cd:
+#         return {"error": "Some required fields are missing."}
+    
+#     encodings = []
+
+#     # Duyệt qua các key của form data
+#     for key in form.keys():
+#         if key.startswith("image"):
+#             file = form[key]  # file là UploadFile
+#             image_bytes = await file.read()
+#             image_np = np.frombuffer(image_bytes, dtype=np.uint8)
+#             img = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+#             if img is None:
+#                 continue
+#             # Chuyển ảnh sang RGB (FaceNet thường yêu cầu ảnh RGB)
+#             rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+#             # Trích xuất encoding, giả sử mỗi ảnh có đúng 1 khuôn mặt
+#             encoding = embedder.embeddings([rgb_image])[0]
+#             encodings.append(encoding)
+    
+#     if not encodings:
+#         return {"error": "Không nhận được hình hợp lệ để trích xuất khuôn mặt."}
+    
+#     # Lưu vào database
+#     try:
+#         db = next(get_db(tenant_cd))
+#         exist = PersonEmbeddingStore.get_person_embedding_by_id(db, party_id)
+        
+#         if exist:
+#             existing_blob = pickle.loads(exist.embedding)
+#             encodings.append(existing_blob)
+
+#         avg_encoding = np.mean(encodings, axis=0)
+#         encoding_blob = pickle.dumps(avg_encoding)
+
+#         entity = PersonEmbeddingCreate(party_id=party_id, embedding=encoding_blob)
+#         if exist:
+#             PersonEmbeddingStore.update_person_embedding(db, party_id, entity)
+#         else:
+#             PersonEmbeddingStore.create_person_embedding(db, entity)
+
+
+#     except Exception as e:
+#         return {"error": f"Lỗi khi lưu vào MySQL: {e}"}
+    
+#     # Cập nhật cache Redis ngay lập tức
+#     try:
+#         redis_key = f"{tenant_cd}:{party_id}"
+#         redis_client.set(redis_key, encoding_blob)
+#     except Exception as e:
+#         return {"error": f"Lỗi khi cập nhật Redis: {e}"}
+
+#     return {"message": f"Added employee {party_id}"}
 
 @app.delete("/delete_employee/{tenant_cd}/{party_id}")
 async def delete_employee(tenant_cd:str, party_id: str):
@@ -193,20 +260,17 @@ async def delete_employee(tenant_cd:str, party_id: str):
     Server sẽ xóa nhân viên khỏi MySQL và Redis.
     """
     if not party_id or not tenant_cd:
-        LOGGER.warning("Party ID or tenant code is missing.")
-        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Party ID or tenant code is missing."})
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": "Some required fields are missing."})
     
     try:
-        await delete_person_embedding(tenant_cd, party_id)
+        db = next(get_db(tenant_cd))
+        PersonEmbeddingStore.delete_person_embedding(db, party_id)
         redis_keys = redis_client.keys(f"{tenant_cd}_*")
         for key in redis_keys:
             if party_id == get_party_id_from_key(key.decode()):
                 redis_client.delete(key)
-
-        LOGGER.info(f"Deleted {party_id} from tenant {tenant_cd}.")
         return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"Deleted employee {party_id}"})
     except Exception as e:
-        LOGGER.error(f"Error deleting employee: {e}")
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error deleting employee: {e}"})
 
 if __name__ == "__main__":

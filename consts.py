@@ -16,3 +16,11 @@ DATABASES = {
 }
 
 IMG_SIZE = (160, 160)
+
+TENANT_DICT = {
+    "demo": {
+        "host": "https://demo.ecom365.vn",
+        "username": "admin",
+        "password": "111111",
+    }
+}
