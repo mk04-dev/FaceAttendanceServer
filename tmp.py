@@ -15,12 +15,14 @@ res = session.post('https://demo.ecom365.vn/webpos/control/ecomGetAuthentication
                 "USERNAME": "admin",
                 "PASSWORD": "111111",
             })
-print(res.json())
-
+# print(res.json())
 headers = {
     "Bearer": res.json().get('token'),
     "Content-Type": "application/json;charset=UTF-8",
 }
-# # # Gửi POST request
-response = session.get("https://demo.ecom365.vn/erp/hrm/v1/api/personEmbedding", headers=headers)
-print(response.text)
+response = session.get('https://demo.ecom365.vn/erp/fdn/v1/api/userLogin/basic',headers=headers)
+print(response)
+
+# # # # Gửi POST request
+# response = session.get("https://demo.ecom365.vn/erp/hrm/v1/api/personEmbedding", headers=headers)
+# print(response.text)

@@ -9,9 +9,9 @@ from keras_facenet import FaceNet
 import pickle
 from scipy.spatial.distance import cosine
 import asyncio
-import json
+import json, base64
 from consts import TENANT_DICT
-from api import load_all_embeddings, create_timekeeping, create_person_embedding, delete_person_embedding
+from api import load_all_embeddings, checkInByFaceRecognition, create_person_embedding, delete_person_embedding
 from logger_service import LoggerService
 
 class RecorgnizeFace:
@@ -38,9 +38,11 @@ async def load_employee_data():
         try:
             data = await load_all_embeddings(tenant_cd)  # Tải dữ liệu từ DB vào cache
             for item in data:
-                encoding = pickle.loads(item.embedding)
-                redis_key = f"{tenant_cd}_{item.idx}:{item.party_id}"
-                redis_client.set(redis_key, pickle.dumps(encoding))
+                embedding_bytes = base64.b64decode(item.get('embedding'))
+                # encoding = pickle.loads(embedding_bytes)
+                redis_key = f"{tenant_cd}_{item.get('id')}:{item.get('partyId')}"
+                # redis_client.set(redis_key, pickle.dumps(encoding))
+                redis_client.set(redis_key, embedding_bytes)
         except Exception as e:
             LOGGER.error(f"Loading data for [{tenant_cd}]: {e}")
 
@@ -60,7 +62,7 @@ async def add_dms_history(tenant_cd, party_id, address, branch_id, image_bytes):
     if party_id in history and (current_timestamp - history[party_id]).total_seconds() < 10:
         return "Already added"
     try:
-        await create_timekeeping(tenant_cd, party_id, address, branch_id, image_bytes)
+        await checkInByFaceRecognition(tenant_cd, party_id, address, branch_id, image_bytes)
         history[party_id] = current_timestamp
         LOGGER.info(f"Added timekeeping for [{party_id}]")
         return "Added"
@@ -85,8 +87,7 @@ async def recognize_face(request: Request):
         form = await request.form()  # Lấy toàn bộ form data
         tenant_cd = form.get("tenant_cd")
         address_str = form.get("address")
-        address = json.loads(address_str) if address_str else {}
-        
+        address = json.loads(address_str)[0] if address_str else {}
         branch_id = form.get("branch_id")
         redis_keys = list(redis_client.keys(f"{tenant_cd}_*"))
         if not redis_keys or len(redis_keys) == 0:
@@ -166,8 +167,8 @@ async def add_employee(request: Request):
                 encoding = embedder.embeddings([img])[0]
                 encoding_blob = pickle.dumps(encoding)
                 data.append({
-                    "party_id": party_id,
-                    "embedding": encoding_blob,
+                    "partyId": party_id,
+                    "embedding": base64.b64encode(encoding_blob).decode('utf-8'),
                 })
         if not data:
             LOGGER.warning("There is no valid image to extract face.")
@@ -176,8 +177,8 @@ async def add_employee(request: Request):
         # Lưu vào database
         results =  await create_person_embedding(tenant_cd, data)
         for result in results:
-            redis_key = f"{tenant_cd}_{result.id}:{result.party_id}"
-            redis_client.set(redis_key, result.embedding)
+            redis_key = f"{tenant_cd}_{result.get('id')}:{result.get('partyId')}"
+            redis_client.set(redis_key, base64.b64decode(result.get('embedding')))
         
         LOGGER.info(f"Added employee {party_id} with {len(data)} images.")
         return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"Added employee {party_id}"})
