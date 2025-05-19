@@ -86,14 +86,6 @@ async def checkInByFaceRecognition(tenant_cd: str, party_id, address, branch_id,
         'attendanceDTO': (None, json.dumps(attendanceDTO), 'application/json'),
         'image': ('image.jpg', image_bytes, 'image/jpeg')
     }
-    LOGGER.info(files)
     url = f"{TENANT['host']}/erp/hrm/v1/api/attendance/checkInByFaceRecognition"
     response = session.post(url, files=files)
     handle_response(response)
-    # url = f"https://localhost:8443/erp/hrm/v1/api/attendance/checkInByFaceRecognition"
-    # headers = {
-    #     "Authorization": "Bearer eyJhbGciOiJIUzUxMiJ9.eyJpYXQiOjE3NDc1NzEwNjAsImV4cCI6MTc0NzU4NzU5OSwidXNlckxvZ2luSWQiOiJhZG1pbiIsImRlbGVnYXRvck5hbWUiOiJkZWZhdWx0I3Rlc3QxIiwiZGVsZWdhdG9yVGVuYW50SWQiOiJ0ZXN0MSIsInNlcnZlck5hbWUiOiJ0ZW5hbnQxLmVjb20zNjUubG9jYWxob3N0IiwiZGVsZWdhdG9yVGVuYW50Q29tcGFueUNvZGUiOiJ0ZW5hbnQxIiwicGFydHlJZCI6IjIifQ.ZzSyJIX-u1w3cjV5mXpUtTQAtdGEjDvZWZfovxyacK8_NUjpAHSomSfSkrKc1NagXX1NV4_bI9titCCDmQFWsQ",
-    #     "Cookie": "JSESSIONID=2EC4E373B8507E8806F0573FAB52EEA3.jvm1; OFBiz.Visitor=63601; JSESSIONID=4B98990BCB3E783DCFC535C002FA5354.jvm1",
-    # }
-    # response = requests.post(url, files=files, headers=headers, verify=False)
-    # handle_response(response)

@@ -108,10 +108,10 @@ async def recognize_face(request: Request):
                 image = cv2.imdecode(image, cv2.IMREAD_COLOR)
         
                 # Chuyển ảnh sang RGB
-                # rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
                 # Trích xuất đặc trưng khuôn mặt
-                face_encoding = embedder.embeddings([image])[0]
+                face_encoding = embedder.embeddings([rgb_image])[0]
         
                 # Chạy song song các tác vụ nhận diện
                 comparisons = await asyncio.gather(*[compare_face_with_redis(key, face_encoding) for key in redis_keys])
@@ -121,9 +121,9 @@ async def recognize_face(request: Request):
                 if min_dist < 0.3:  # Ngưỡng nhận diện
                     party_id = get_party_id_from_key(best_match)
                     added = await add_dms_history(tenant_cd, party_id, address, branch_id, image_bytes)  # Thêm lịch sử vào DB
-                    results.append(RecorgnizeFace(party_id, min_dist, added))
+                    results.append(RecorgnizeFace(party_id, float(min_dist), added))
                 else:
-                    results.append(RecorgnizeFace("Unknown", min_dist, 'Not added'))
+                    results.append(RecorgnizeFace("Unknown", float(min_dist), 'Not added'))
                     # Tìm kết quả tốt nhất
 
         return JSONResponse(status_code=status.HTTP_200_OK, content={"results": [result.__dict__ for result in results]})
@@ -162,9 +162,9 @@ async def add_employee(request: Request):
                 if img is None:
                     continue
                 # Chuyển ảnh sang RGB (FaceNet thường yêu cầu ảnh RGB)
-                # rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 # Trích xuất encoding, giả sử mỗi ảnh có đúng 1 khuôn mặt
-                encoding = embedder.embeddings([img])[0]
+                encoding = embedder.embeddings([rgb_image])[0]
                 encoding_blob = pickle.dumps(encoding)
                 data.append({
                     "partyId": party_id,

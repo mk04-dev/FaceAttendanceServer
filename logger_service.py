@@ -13,7 +13,7 @@ class ColorFormatter(logging.Formatter):
 
     def format(self, record):
         log_fmt = (
-            "%(asctime)-19s | %(levelname)-8s | %(module)-10s | "
+            "%(asctime)-19s | %(levelname)-8s | %(module)-15s | "
             "%(funcName)-25s | line %(lineno)-4d | %(message)s"
         )
         color = self.COLORS.get(record.levelname, self.RESET)
@@ -29,7 +29,7 @@ class LoggerService:
 
         if not self.logger.handlers:
             plain_formatter = logging.Formatter(
-                fmt="%(asctime)-19s | %(levelname)-8s | %(module)-10s | %(funcName)-25s | line %(lineno)-4d | %(message)s",
+                fmt="%(asctime)-19s | %(levelname)-8s | %(module)-15s | %(funcName)-25s | line %(lineno)-4d | %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S"
             )
 
