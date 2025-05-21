@@ -2,4 +2,4 @@
 *.pyc
 trainning/face-recognition-dataset/*
 trainning/face-recognition-dataset-splitted/*
-*.log
+logs/*

@@ -1,6 +1,5 @@
 from logging.handlers import TimedRotatingFileHandler
 import logging
-
 class ColorFormatter(logging.Formatter):
     COLORS = {
         'DEBUG':    '\033[90m',
@@ -14,7 +13,7 @@ class ColorFormatter(logging.Formatter):
     def format(self, record):
         log_fmt = (
             "%(asctime)-19s | %(levelname)-8s | %(module)-15s | "
-            "%(funcName)-25s | line %(lineno)-4d | %(message)s"
+            "%(funcName)-30s | line %(lineno)-4d | %(message)s"
         )
         color = self.COLORS.get(record.levelname, self.RESET)
         formatter = logging.Formatter(color + log_fmt + self.RESET, "%Y-%m-%d %H:%M:%S")
@@ -22,14 +21,14 @@ class ColorFormatter(logging.Formatter):
 
 
 class LoggerService:
-    def __init__(self, log_file: str = "app.log", level: int = logging.INFO):
+    def __init__(self, log_file: str = "logs/app.log", level: int = logging.INFO):
         self.logger = logging.getLogger()
         self.logger.setLevel(level)
         self.logger.propagate = False
 
         if not self.logger.handlers:
             plain_formatter = logging.Formatter(
-                fmt="%(asctime)-19s | %(levelname)-8s | %(module)-15s | %(funcName)-25s | line %(lineno)-4d | %(message)s",
+                fmt="%(asctime)-19s | %(levelname)-8s | %(module)-15s | %(funcName)-30s | line %(lineno)-4d | %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S"
             )
 

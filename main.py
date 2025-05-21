@@ -1,6 +1,6 @@
 from datetime import datetime
-from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, status, Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import redis
 import cv2
@@ -10,15 +10,24 @@ import pickle
 from scipy.spatial.distance import cosine
 import asyncio
 import json, base64
-from consts import TENANT_DICT
-from api import load_all_embeddings, checkInByFaceRecognition, create_person_embedding, delete_person_embedding
+from consts import TENANT_DICT, PERMISSION_CREATE, PERMISSION_DELETE, THRESHOLD, OVERLAP_TIME
+from api import load_all_embeddings, checkInByFaceRecognition, create_person_embedding, delete_person_embedding, parse_authorize_token
+from utils import check_permission
 from logger_service import LoggerService
+from pydantic import BaseModel
+from typing import Optional, Any
+security = HTTPBearer()
+
 
 class RecorgnizeFace:
-    def __init__(self, party_id: str, score: float, added: str):
+    def __init__(self, party_id: str, fullName: str):
         self.party_id = party_id
-        self.score = score
-        self.added = added
+        self.fullName = fullName
+
+class ResponseModel(BaseModel):
+    status: int
+    message: str = "OK"
+    data: Optional[Any] = None
     
 app = FastAPI()
 
@@ -30,6 +39,32 @@ embedder = FaceNet()  # Load model FaceNet
 history = {}
 LOGGER = LoggerService().get_logger()
 
+async def custom_auth(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    client_ip = get_client_ip(request)
+    # print(request.json())
+
+    # Nếu IP không được phép, bắt buộc có JWT
+    if not credentials:
+        LOGGER.warning(f"Credentials fail - IP: {client_ip}.")
+        raise HTTPException(status_code=403, detail="Missing token")
+
+    token = credentials.credentials
+    try:
+        data = parse_authorize_token(request.form.get("tenant_cd"), token)
+        return data  # hoặc gán payload cho current_user nếu cần
+    except Exception as e:
+        LOGGER.warning(f"Credentials fail - IP: {client_ip}.")
+        raise HTTPException(status_code=403, detail="Invalid token")
+    
+def get_client_ip(request: Request):
+    x_forwarded_for = request.headers.get("x-forwarded-for")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0]
+    return request.client.host
+
 # Hàm tải dữ liệu nhân viên từ DB vào cache
 async def load_employee_data():
     redis_client.flushdb()  # Xóa cache cũ
@@ -39,9 +74,7 @@ async def load_employee_data():
             data = await load_all_embeddings(tenant_cd)  # Tải dữ liệu từ DB vào cache
             for item in data:
                 embedding_bytes = base64.b64decode(item.get('embedding'))
-                # encoding = pickle.loads(embedding_bytes)
                 redis_key = f"{tenant_cd}_{item.get('id')}:{item.get('partyId')}"
-                # redis_client.set(redis_key, pickle.dumps(encoding))
                 redis_client.set(redis_key, embedding_bytes)
         except Exception as e:
             LOGGER.error(f"Loading data for [{tenant_cd}]: {e}")
@@ -59,29 +92,38 @@ async def compare_face_with_redis(key, face_encoding):
 async def add_dms_history(tenant_cd, party_id, address, branch_id, image_bytes):
     current_timestamp = datetime.now()
     ## Kiểm tra xem đã có lịch sử trong 10 giây qua chưa
-    if party_id in history and (current_timestamp - history[party_id]).total_seconds() < 10:
-        return "Already added"
+    if party_id in history and (current_timestamp - history[party_id][current_timestamp]).total_seconds() < OVERLAP_TIME:
+        return history[party_id]["fullName"]
     try:
-        await checkInByFaceRecognition(tenant_cd, party_id, address, branch_id, image_bytes)
-        history[party_id] = current_timestamp
+        fullName = await checkInByFaceRecognition(tenant_cd, party_id, address, branch_id, image_bytes)
+        history[party_id] = {
+            "fullName": fullName,
+            "current_timestamp": current_timestamp,
+        }
         LOGGER.info(f"Added timekeeping for [{party_id}]")
-        return "Added"
+        return fullName
     except Exception as e:
         LOGGER.error(f"Adding timekeeping for [{party_id}]: {e}")
-        return "Error"
-
+        return "Unknown"
 
 @app.get("/reload-cache")
-async def reload_cache():
-    await load_employee_data()
-    return {"message": "Reloaded face data"}
+async def reload_cache(auth_result = Depends(custom_auth)):
+    try:
+        if not check_permission(auth_result.get("permissions"), []):
+            return ResponseModel(status=status.HTTP_400_BAD_REQUEST, message="Have no permission")
+        await load_employee_data()
+        LOGGER.info("Reload cache")
+        return ResponseModel(status=status.HTTP_200_OK, data="Reloaded face data")
+    except Exception as e:
+        LOGGER.error(e)
+        return ResponseModel(status=status.HTTP_500_BAD_REQUEST, message=e)
 
 @app.on_event("startup")
 async def startup_event():
     await load_employee_data()
 
 @app.post("/recognize")
-async def recognize_face(request: Request):
+async def recognize_face(request: Request, auth_result = Depends(custom_auth)):
     try:
         """API nhận diện khuôn mặt"""
         form = await request.form()  # Lấy toàn bộ form data
@@ -89,13 +131,17 @@ async def recognize_face(request: Request):
         address_str = form.get("address")
         address = json.loads(address_str)[0] if address_str else {}
         branch_id = form.get("branch_id")
+        
+        if not check_permission(auth_result.get("permissions"), [PERMISSION_CREATE]):
+            userLoginId = auth_result.get("userLoginId")
+            
         redis_keys = list(redis_client.keys(f"{tenant_cd}_*"))
         if not redis_keys or len(redis_keys) == 0:
             LOGGER.warning("No employee data found in Redis.")
-            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "No employee data found in Redis."})
+            return ResponseModel(status=status.HTTP_400_BAD_REQUEST, message="No employee data found in Redis.")
         if not tenant_cd:
             LOGGER.warning("Tenant code is missing.")
-            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Tenant code is missing."})
+            return ResponseModel(status=status.HTTP_400_BAD_REQUEST, message="Tenant code is missing.")
         
         results = []
         # Lấy danh sách tất cả các key từ Redis một cách bất đồng bộ
@@ -118,21 +164,23 @@ async def recognize_face(request: Request):
 
                 # Tìm kết quả tốt nhất
                 best_match, min_dist = min(comparisons, key=lambda x: x[1])
-                if min_dist < 0.3:  # Ngưỡng nhận diện
+
+                if min_dist < THRESHOLD:  # Ngưỡng nhận diện
                     party_id = get_party_id_from_key(best_match)
-                    added = await add_dms_history(tenant_cd, party_id, address, branch_id, image_bytes)  # Thêm lịch sử vào DB
-                    results.append(RecorgnizeFace(party_id, float(min_dist), added))
+                    if party_id == userLoginId:
+                        fullName = await add_dms_history(tenant_cd, party_id, address, branch_id, image_bytes)  # Thêm lịch sử vào DB
+                        results.append(RecorgnizeFace(party_id, fullName))
                 else:
-                    results.append(RecorgnizeFace("Unknown", float(min_dist), 'Not added'))
+                    results.append(RecorgnizeFace("", "Unknown"))
                     # Tìm kết quả tốt nhất
 
-        return JSONResponse(status_code=status.HTTP_200_OK, content={"results": [result.__dict__ for result in results]})
+        return ResponseModel(status=status.HTTP_200_OK, data=[result.__dict__ for result in results])
     except Exception as e:
         LOGGER.error(f"Recognizing face: {e}")
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error recognizing face: {e}"})
+        return ResponseModel(status=status.HTTP_500_INTERNAL_SERVER_ERROR, message=f"Error recognizing face: {e}")
 
 @app.post("/add_employee")
-async def add_employee(request: Request):
+async def add_employee(request: Request, auth_result = Depends(custom_auth)):
     """
     Endpoint để thêm nhân viên mới.
     Client gửi các file hình với các key "image0", "image1", ... và dữ liệu form "name".
@@ -146,9 +194,12 @@ async def add_employee(request: Request):
     party_id = form.get("party_id")
     tenant_cd = form.get("tenant_cd")
 
+    if auth_result.get("userLoginId") != party_id and not check_permission(auth_result.get("permissions"), [PERMISSION_CREATE]):
+        return ResponseModel(status=status.HTTP_401_UNAUTHORIZED, message="Unauthorized")
+        
     if not party_id or not tenant_cd:
         LOGGER.warning("Party ID or tenant code is missing.")
-        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Party ID or tenant code is missing."})
+        return ResponseModel(status=status.HTTP_400_BAD_REQUEST, message="Party ID or tenant code is missing.")
 
     try:
         # Duyệt qua các key của form data
@@ -172,7 +223,7 @@ async def add_employee(request: Request):
                 })
         if not data:
             LOGGER.warning("There is no valid image to extract face.")
-            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "There is no valid image to extract face."})
+            return ResponseModel(status=status.HTTP_400_BAD_REQUEST, message="There is no valid image to extract face")
         
         # Lưu vào database
         results =  await create_person_embedding(tenant_cd, data)
@@ -181,21 +232,24 @@ async def add_employee(request: Request):
             redis_client.set(redis_key, base64.b64decode(result.get('embedding')))
         
         LOGGER.info(f"Added employee {party_id} with {len(data)} images.")
-        return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"Added employee {party_id}"})
+        return ResponseModel(status=status.HTTP_200_OK, data=f"Added employee {party_id}")
     except Exception as e:
         LOGGER.error(f"Adding employee: {e}")
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error adding employee: {e}"})
+        return ResponseModel(status=status.HTTP_500_INTERNAL_SERVER_ERROR, message=e)
 
 @app.delete("/delete_employee/{tenant_cd}/{party_id}")
-async def delete_employee(tenant_cd:str, party_id: str):
+async def delete_employee(tenant_cd:str, party_id: str, auth_result =  Depends(custom_auth)):
     """
     Endpoint để xóa nhân viên.
     Client gửi dữ liệu form với các trường "party_id" và "tenant_cd".
     Server sẽ xóa nhân viên khỏi MySQL và Redis.
     """
+    if auth_result.get("userLoginId") != party_id and not check_permission(auth_result.get("permissions"), [PERMISSION_DELETE]):
+        return ResponseModel(status=status.HTTP_401_UNAUTHORIZED, message="Unauthorized")
+    
     if not party_id or not tenant_cd:
         LOGGER.warning("Party ID or tenant code is missing.")
-        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Party ID or tenant code is missing."})
+        return ResponseModel(status=status.HTTP_400_BAD_REQUEST, message="Party ID or tenant code is missing.")
     
     try:
         await delete_person_embedding(tenant_cd, party_id)
@@ -205,10 +259,10 @@ async def delete_employee(tenant_cd:str, party_id: str):
                 redis_client.delete(key)
 
         LOGGER.info(f"Deleted {party_id} from tenant {tenant_cd}.")
-        return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"Deleted employee {party_id}"})
+        return ResponseModel(status=status.HTTP_200_OK, message=f"Deleted employee {party_id}")
     except Exception as e:
         LOGGER.error(f"Error deleting employee: {e}")
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Error deleting employee: {e}"})
+        return ResponseModel(status=status.HTTP_500_INTERNAL_SERVER_ERROR, message=f"Error deleting employee: {e}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000, log_level="trace")

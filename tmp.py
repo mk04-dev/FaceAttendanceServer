@@ -1,28 +1,6 @@
-import requests
-# Tạo session
-session = requests.Session()
-res = session.post('https://demo.ecom365.vn/webpos/control/ecomGetAuthenticationToken', 
-            headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Accept-Encoding": "gzip, deflate, br, zstd",
-                "Accept-Language": "vi-VN,vi;q=0.9,fr-FR;q=0.8,fr;q=0.7,en-US;q=0.6,en;q=0.5",
-                "Cache-Control": "max-age=0",
-                "Connection": "keep-alive",
-                "Content-Type": "application/x-www-form-urlencoded",
-                # "X-Tenant-Id": "test1",
-            }, 
-            data={
-                "USERNAME": "admin",
-                "PASSWORD": "111111",
-            })
-# print(res.json())
-headers = {
-    "Bearer": res.json().get('token'),
-    "Content-Type": "application/json;charset=UTF-8",
-}
-response = session.get('https://demo.ecom365.vn/erp/fdn/v1/api/userLogin/basic',headers=headers)
-print(response)
+import jwt
 
-# # # # Gửi POST request
-# response = session.get("https://demo.ecom365.vn/erp/hrm/v1/api/personEmbedding", headers=headers)
-# print(response.text)
+
+token = "eyJhbGciOiJIUzUxMiJ9.eyJpYXQiOjE3NDc4MTk2NzgsImV4cCI6MTc0Nzg0Njc5OSwidXNlckxvZ2luSWQiOiJhZG1pbiIsImRlbGVnYXRvck5hbWUiOiJkZWZhdWx0I3Rlc3QxIiwiZGVsZWdhdG9yVGVuYW50SWQiOiJ0ZXN0MSIsInNlcnZlck5hbWUiOiJ0ZW5hbnQxLmVjb20zNjUubG9jYWxob3N0IiwiZGVsZWdhdG9yVGVuYW50Q29tcGFueUNvZGUiOiJ0ZW5hbnQxIiwicGFydHlJZCI6IjIifQ.AGKDTo1wE1yeMmEA5vVQ2AqM3xtyp4kvHqAIIm85mYkqZ9M6ing4Ph1VBq1EdVQTUHWMnvMHLPfv1hC9QZBFRw"
+decoded = jwt.decode(token, options={"verify_signature": False})
+print(decoded)

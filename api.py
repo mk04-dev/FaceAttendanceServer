@@ -1,10 +1,8 @@
 from io import BytesIO
-from session_manager import SessionManager
+from session.session_manager import SessionManager
 from utils import get_tenant_info
 import json
-from logger_service import LoggerService
-LOGGER = LoggerService().get_logger()
-import requests
+
 def handle_response(response):
     if response.status_code != 200:
         raise Exception(f"Request failed: {response.text}")
@@ -89,3 +87,15 @@ async def checkInByFaceRecognition(tenant_cd: str, party_id, address, branch_id,
     url = f"{TENANT['host']}/erp/hrm/v1/api/attendance/checkInByFaceRecognition"
     response = session.post(url, files=files)
     handle_response(response)
+    
+def parse_authorize_token(tenant_cd: str, token: str):
+    """
+    Parse the JWT token to get the tenant_cd.
+    """
+    TENANT = get_tenant_info(tenant_cd)
+    session = SessionManager.get_session(tenant_cd)
+    
+    url = f"{TENANT['host']}/erp/fdn/v1/api/userLogin/parseAuthorizeToken"
+    response = session.post(url, json={"token": token})
+    handle_response(response)
+    

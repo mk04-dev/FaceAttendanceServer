@@ -1,22 +1,8 @@
-
-
-MODE_DETECT = 'detect'
-MODE_REGISTER = 'register'
-
-NUM_OF_SAMPLES = 1
-
-COLOR_GREEN = (0, 255, 0)
-COLOR_RED = (0, 0, 255)
-
-THICKNESS = 1
-
-DATABASES = {
-    "manage": "mysql+pymysql://ofbiz:ofbiz@localhost/ofbiz_manage",
-    "tenant1": "mysql+pymysql://ofbiz:ofbiz@localhost/ofbiz_tenant23",
-}
-
+THRESHOLD = 0.3
+OVERLAP_TIME = 10
 IMG_SIZE = (160, 160)
 
+# TENANT
 TENANT_DICT = {
     "demo": {
         "host": "https://demo.ecom365.vn",
@@ -24,3 +10,8 @@ TENANT_DICT = {
         "password": "111111",
     }
 }
+
+# PERMISSION
+FULLADMIN = "FULLADMIN"
+PERMISSION_CREATE = "HRM_EMP_EMB_CREATE"
+PERMISSION_DELETE = "HRM_EMP_EMB_DELETE"
