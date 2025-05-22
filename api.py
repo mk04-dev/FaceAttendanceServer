@@ -1,8 +1,10 @@
 from io import BytesIO
+import logging
 from session.session_manager import SessionManager
 from utils import get_tenant_info
 import json
 import requests
+log = logging.getLogger(__name__)
 
 def handle_response(response):
     if response.status_code != 200:
@@ -18,9 +20,8 @@ async def load_all_embeddings(tenant_cd: str):
     """
     Load all embeddings from the database.
     """
-    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    HOST = get_tenant_info(tenant_cd)['host']  # Kiểm tra xem tenant_cd có hợp lệ không
     session = SessionManager.get_session(tenant_cd)
-
     url = f"{HOST}/erp/hrm/v1/api/personEmbedding"
     
     response = session.get(url)
@@ -28,7 +29,7 @@ async def load_all_embeddings(tenant_cd: str):
     return res.get("data", [])
 
 async def create_timekeeping(tenant_cd: str, party_id, address, branch_id, image_bytes):
-    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    HOST = get_tenant_info(tenant_cd)['host']  # Kiểm tra xem tenant_cd có hợp lệ không
     session = SessionManager.get_session(tenant_cd)
     url = f"{HOST}/erp/hrm/v1/api/timekeeping/create"
     attendance_dto = {
@@ -50,7 +51,7 @@ async def create_timekeeping(tenant_cd: str, party_id, address, branch_id, image
     return res
 
 async def create_person_embedding(tenant_cd: str, data, token):
-    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    HOST = get_tenant_info(tenant_cd)['host']  # Kiểm tra xem tenant_cd có hợp lệ không
     url = f"{HOST}/erp/hrm/v1/api/personEmbedding"
     headers = {
         "Content-Type": "application/json",
@@ -61,7 +62,7 @@ async def create_person_embedding(tenant_cd: str, data, token):
     return res.get("data", [])
 
 async def delete_person_embedding(tenant_cd: str, party_id, token):
-    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    HOST = get_tenant_info(tenant_cd)['host']  # Kiểm tra xem tenant_cd có hợp lệ không
     url = f"{HOST}/erp/hrm/v1/api/personEmbedding/{party_id}"
     headers = {
         "Authorization": f"Bearer {token}"
@@ -70,7 +71,7 @@ async def delete_person_embedding(tenant_cd: str, party_id, token):
     handle_response(response)
 
 async def checkInByFaceRecognition(tenant_cd: str, party_id, address, branch_id, image_bytes, token):
-    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    HOST = get_tenant_info(tenant_cd)['host']  # Kiểm tra xem tenant_cd có hợp lệ không
     attendanceDTO = {
         "partyIds": [party_id],
         "address": address,

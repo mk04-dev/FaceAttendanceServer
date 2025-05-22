@@ -4,5 +4,9 @@ IMG_SIZE = (160, 160)
 
 # TENANT
 TENANT_DICT = {
-    "demo": "https://demo.ecom365.vn",
+    "demo": {
+        "host": "https://demo.ecom365.vn",
+        "username": "admin",
+        "password": "111111",
+    }
 }
