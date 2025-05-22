@@ -2,14 +2,15 @@ from io import BytesIO
 from session.session_manager import SessionManager
 from utils import get_tenant_info
 import json
+import requests
 
 def handle_response(response):
     if response.status_code != 200:
-        raise Exception(f"Request failed: {response.text}")
+        raise Exception(response.text)
     
     res = response.json()
     if res.get("statusCode") != 200:
-        raise Exception(f"Request failed: {res.get('message')}")
+        raise Exception(res.get('message'))
     
     return res
 
@@ -17,19 +18,19 @@ async def load_all_embeddings(tenant_cd: str):
     """
     Load all embeddings from the database.
     """
-    TENANT = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
     session = SessionManager.get_session(tenant_cd)
 
-    url = f"{TENANT['host']}/erp/hrm/v1/api/personEmbedding"
+    url = f"{HOST}/erp/hrm/v1/api/personEmbedding"
     
     response = session.get(url)
     res = handle_response(response)
     return res.get("data", [])
 
 async def create_timekeeping(tenant_cd: str, party_id, address, branch_id, image_bytes):
-    TENANT = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
     session = SessionManager.get_session(tenant_cd)
-    url = f"{TENANT['host']}/erp/hrm/v1/api/timekeeping/create"
+    url = f"{HOST}/erp/hrm/v1/api/timekeeping/create"
     attendance_dto = {
         "partyId": party_id,
         "address": address,
@@ -48,54 +49,45 @@ async def create_timekeeping(tenant_cd: str, party_id, address, branch_id, image
     res = handle_response(response)
     return res
 
-async def create_person_embedding(tenant_cd: str, data):
-    TENANT = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
-    session = SessionManager.get_session(tenant_cd)
-    url = f"{TENANT['host']}/erp/hrm/v1/api/personEmbedding"
-    headers = {"Content-Type": "application/json"}
-    response = session.post(url, json=data, headers=headers)
+async def create_person_embedding(tenant_cd: str, data, token):
+    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    url = f"{HOST}/erp/hrm/v1/api/personEmbedding"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}"
+    }
+    response = requests.post(url, json=data, headers=headers)
     res = handle_response(response)
     return res.get("data", [])
 
-async def delete_person_embedding(tenant_cd: str, party_id):
-    TENANT = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
-    session = SessionManager.get_session(tenant_cd)
-    url = f"{TENANT['host']}/erp/hrm/v1/api/personEmbedding/{party_id}"
-    response = session.delete(url)
+async def delete_person_embedding(tenant_cd: str, party_id, token):
+    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
+    url = f"{HOST}/erp/hrm/v1/api/personEmbedding/{party_id}"
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+    response = requests.delete(url, headers=headers)
     handle_response(response)
 
-async def checkInByFaceRecognition(tenant_cd: str, party_id, address, branch_id, image_bytes):
-    TENANT = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
-    session = SessionManager.get_session(tenant_cd)
-
-
+async def checkInByFaceRecognition(tenant_cd: str, party_id, address, branch_id, image_bytes, token):
+    HOST = get_tenant_info(tenant_cd)  # Kiểm tra xem tenant_cd có hợp lệ không
     attendanceDTO = {
         "partyIds": [party_id],
         "address": address,
         "note": "Face recognition",
         "sourceTimekeeping": "Face recognition",
-        # "appInstallationId": "",
-        # "registerBusinessTripId": "",
-        # "contentId": "",
-        # "executionTime": "",
         "branchId": branch_id,
     }
     files = {
         'attendanceDTO': (None, json.dumps(attendanceDTO), 'application/json'),
         'image': ('image.jpg', image_bytes, 'image/jpeg')
     }
-    url = f"{TENANT['host']}/erp/hrm/v1/api/attendance/checkInByFaceRecognition"
-    response = session.post(url, files=files)
-    handle_response(response)
-    
-def parse_authorize_token(tenant_cd: str, token: str):
-    """
-    Parse the JWT token to get the tenant_cd.
-    """
-    TENANT = get_tenant_info(tenant_cd)
-    session = SessionManager.get_session(tenant_cd)
-    
-    url = f"{TENANT['host']}/erp/fdn/v1/api/userLogin/parseAuthorizeToken"
-    response = session.post(url, json={"token": token})
-    handle_response(response)
+    headers={
+        "Authorization": f"Bearer {token}"
+    }
+    url = f"{HOST}/erp/hrm/v1/api/attendance/checkInByFaceRecognition"
+    response = requests.post(url, files=files, headers=headers)
+    res = handle_response(response)
+    return res.get("data", [])
+
     
