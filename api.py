@@ -55,7 +55,7 @@ async def create_person_embedding(tenant_cd: str, data, token):
     url = f"{HOST}/erp/hrm/v1/api/personEmbedding"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
+        "Bearer": f"{token}"
     }
     response = requests.post(url, json=data, headers=headers)
     res = handle_response(response)
@@ -65,7 +65,7 @@ async def delete_person_embedding(tenant_cd: str, party_id, token):
     HOST = get_tenant_info(tenant_cd)['host']  # Kiểm tra xem tenant_cd có hợp lệ không
     url = f"{HOST}/erp/hrm/v1/api/personEmbedding/{party_id}"
     headers = {
-        "Authorization": f"Bearer {token}"
+        "Bearer": f"{token}"
     }
     response = requests.delete(url, headers=headers)
     handle_response(response)
@@ -84,11 +84,12 @@ async def checkInByFaceRecognition(tenant_cd: str, party_id, address, branch_id,
         'image': ('image.jpg', image_bytes, 'image/jpeg')
     }
     headers={
-        "Authorization": f"Bearer {token}"
+        "Bearer": f"{token}"
     }
-    url = f"{HOST}/erp/hrm/v1/api/attendance/checkInByFaceRecognition"
+    url = f"{HOST}/erp/hrm/v1/api/attendance/checkInByFaceRecognitionV2"
     response = requests.post(url, files=files, headers=headers)
     res = handle_response(response)
-    return res.get("data", [])
+    logging.info(res)
+    return res.get("message", "")
 
     

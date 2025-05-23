@@ -64,7 +64,7 @@ async def compare_face_with_redis(key, face_encoding):
 async def add_dms_history(tenant_cd, party_id, address, branch_id, image_bytes, token):
     current_timestamp = datetime.now()
     ## Kiểm tra xem đã có lịch sử trong 10 giây qua chưa
-    if party_id in history and (current_timestamp - history[party_id][current_timestamp]).total_seconds() < OVERLAP_TIME:
+    if party_id in history and (current_timestamp - history[party_id]['current_timestamp']).total_seconds() < OVERLAP_TIME:
         return history[party_id]["fullName"]
     try:
         fullName = await checkInByFaceRecognition(tenant_cd, party_id, address, branch_id, image_bytes, token)
